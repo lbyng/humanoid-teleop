@@ -28,6 +28,251 @@ kTopicDex3RightCommand = "rt/dex3/right/cmd"
 kTopicDex3LeftState = "rt/dex3/left/state"
 kTopicDex3RightState = "rt/dex3/right/state"
 
+class HandStateClassifier:
+    def __init__(self):
+        # self.left_close_cmd = np.array([0, 1.05, 1.75, -1.57, -1.75, -1.57, -1.75])
+        # self.right_close_cmd = np.array([0, -1.05 , -1.75, 1.57, 1.75, 1.57, 1.75])
+
+        self.left_close_cmd = np.zeros(7)
+        self.right_close_cmd = np.zeros(7)
+        
+        self.left_open_cmd = np.zeros(7)
+        self.right_open_cmd = np.zeros(7)
+        
+        self.close_threshold = 0.8
+        
+        # Confidence parameters
+        self.confidence_threshold = 5
+        
+        # State tracking for each hand
+        self.left_hand_closed = False
+        self.right_hand_closed = False
+        
+        # Confidence counters
+        self.left_open_count = 0
+        self.left_close_count = 0
+        self.right_open_count = 0
+        self.right_close_count = 0
+        
+    def classify_and_get_command(self, current_joints, is_left_hand=True):
+        if is_left_hand:
+            close_ref = self.left_close_cmd
+            open_cmd = self.left_open_cmd
+            close_cmd = self.left_close_cmd
+            is_closed = self.left_hand_closed
+            open_count = self.left_open_count
+            close_count = self.left_close_count
+        else:
+            close_ref = self.right_close_cmd
+            open_cmd = self.right_open_cmd
+            close_cmd = self.right_close_cmd
+            is_closed = self.right_hand_closed
+            open_count = self.right_open_count
+            close_count = self.right_close_count
+            
+        # Calculate distance to closed position
+        distance_to_close = np.mean(np.abs(current_joints - close_ref))
+        
+        # Determine open or closed
+        current_reading_closed = distance_to_close < self.close_threshold
+        
+        # Update confidence counters
+        if current_reading_closed:
+            close_count += 1
+            open_count = 0
+        else:
+            open_count += 1
+            close_count = 0
+        
+        # Check confidence for state change
+        if not is_closed and close_count >= self.confidence_threshold:
+            is_closed = True
+            close_count = 0
+        elif is_closed and open_count >= self.confidence_threshold:
+            is_closed = False
+            open_count = 0
+        
+        # Update state and counters
+        if is_left_hand:
+            self.left_hand_closed = is_closed
+            self.left_open_count = open_count
+            self.left_close_count = close_count
+        else:
+            self.right_hand_closed = is_closed
+            self.right_open_count = open_count
+            self.right_close_count = close_count
+        
+        # Return control command
+        if is_closed:
+            return close_cmd.copy()
+        else:
+            return open_cmd.copy()
+
+
+class Dex3_1_State_Controller:
+    def __init__(self, left_hand_array, right_hand_array, dual_hand_data_lock = None, dual_hand_state_array = None,
+                       dual_hand_action_array = None, fps = 100.0, Unit_Test = False):
+
+        print("Initialize Dex3_1_State_Controller...")
+
+        self.fps = fps
+        self.Unit_Test = Unit_Test
+        if not self.Unit_Test:
+            self.hand_retargeting = HandRetargeting(HandType.UNITREE_DEX3)
+        else:
+            self.hand_retargeting = HandRetargeting(HandType.UNITREE_DEX3_Unit_Test)
+            ChannelFactoryInitialize(0)
+
+        self.hand_classifier = HandStateClassifier()
+        print("HandStateClassifier enabled!")
+
+        # initialize handcmd publisher and handstate subscriber
+        self.LeftHandCmb_publisher = ChannelPublisher(kTopicDex3LeftCommand, HandCmd_)
+        self.LeftHandCmb_publisher.Init()
+        self.RightHandCmb_publisher = ChannelPublisher(kTopicDex3RightCommand, HandCmd_)
+        self.RightHandCmb_publisher.Init()
+
+        self.LeftHandState_subscriber = ChannelSubscriber(kTopicDex3LeftState, HandState_)
+        self.LeftHandState_subscriber.Init()
+        self.RightHandState_subscriber = ChannelSubscriber(kTopicDex3RightState, HandState_)
+        self.RightHandState_subscriber.Init()
+
+        # Shared Arrays for hand states
+        self.left_hand_state_array  = Array('d', Dex3_Num_Motors, lock=True)  
+        self.right_hand_state_array = Array('d', Dex3_Num_Motors, lock=True)
+
+        # initialize subscribe thread
+        self.subscribe_state_thread = threading.Thread(target=self._subscribe_hand_state)
+        self.subscribe_state_thread.daemon = True
+        self.subscribe_state_thread.start()
+
+        while True:
+            if any(self.left_hand_state_array) and any(self.right_hand_state_array):
+                break
+            time.sleep(0.01)
+            print("[Dex3_1_Controller] Waiting to subscribe dds...")
+
+        hand_control_process = Process(target=self.control_process, args=(left_hand_array, right_hand_array,  self.left_hand_state_array, self.right_hand_state_array,
+                                                                          dual_hand_data_lock, dual_hand_state_array, dual_hand_action_array))
+        hand_control_process.daemon = True
+        hand_control_process.start()
+
+        print("Initialize Dex3_1_State_Controller OK!\n")
+
+    def _subscribe_hand_state(self):
+        while True:
+            left_hand_msg  = self.LeftHandState_subscriber.Read()
+            right_hand_msg = self.RightHandState_subscriber.Read()
+            if left_hand_msg is not None and right_hand_msg is not None:
+                # Update left hand state
+                for idx, id in enumerate(Dex3_1_Left_JointIndex):
+                    self.left_hand_state_array[idx] = left_hand_msg.motor_state[id].q
+                # Update right hand state
+                for idx, id in enumerate(Dex3_1_Right_JointIndex):
+                    self.right_hand_state_array[idx] = right_hand_msg.motor_state[id].q
+            time.sleep(0.002)
+    
+    class _RIS_Mode:
+        def __init__(self, id=0, status=0x01, timeout=0):
+            self.motor_mode = 0
+            self.id = id & 0x0F  # 4 bits for id
+            self.status = status & 0x07  # 3 bits for status
+            self.timeout = timeout & 0x01  # 1 bit for timeout
+
+        def _mode_to_uint8(self):
+            self.motor_mode |= (self.id & 0x0F)
+            self.motor_mode |= (self.status & 0x07) << 4
+            self.motor_mode |= (self.timeout & 0x01) << 7
+            return self.motor_mode
+
+    def ctrl_dual_hand(self, left_q_target, right_q_target):
+        """set current left, right hand motor state target q"""
+        for idx, id in enumerate(Dex3_1_Left_JointIndex):
+            self.left_msg.motor_cmd[id].q = left_q_target[idx]
+        for idx, id in enumerate(Dex3_1_Right_JointIndex):
+            self.right_msg.motor_cmd[id].q = right_q_target[idx]
+
+        self.LeftHandCmb_publisher.Write(self.left_msg)
+        self.RightHandCmb_publisher.Write(self.right_msg)
+        # print("hand ctrl publish ok.")
+    
+    def control_process(self, left_hand_array, right_hand_array, left_hand_state_array, right_hand_state_array,
+                              dual_hand_data_lock = None, dual_hand_state_array = None, dual_hand_action_array = None):
+        self.running = True
+
+        left_q_target  = np.full(Dex3_Num_Motors, 0)
+        right_q_target = np.full(Dex3_Num_Motors, 0)
+
+        q = 0.0
+        dq = 0.0
+        tau = 0.0
+        kp = 1.5
+        kd = 0.2
+
+        # initialize dex3-1's left hand cmd msg
+        self.left_msg  = unitree_hg_msg_dds__HandCmd_()
+        for id in Dex3_1_Left_JointIndex:
+            ris_mode = self._RIS_Mode(id = id, status = 0x01)
+            motor_mode = ris_mode._mode_to_uint8()
+            self.left_msg.motor_cmd[id].mode = motor_mode
+            self.left_msg.motor_cmd[id].q    = q
+            self.left_msg.motor_cmd[id].dq   = dq
+            self.left_msg.motor_cmd[id].tau  = tau
+            self.left_msg.motor_cmd[id].kp   = kp
+            self.left_msg.motor_cmd[id].kd   = kd
+
+        # initialize dex3-1's right hand cmd msg
+        self.right_msg = unitree_hg_msg_dds__HandCmd_()
+        for id in Dex3_1_Right_JointIndex:
+            ris_mode = self._RIS_Mode(id = id, status = 0x01)
+            motor_mode = ris_mode._mode_to_uint8()
+            self.right_msg.motor_cmd[id].mode = motor_mode  
+            self.right_msg.motor_cmd[id].q    = q
+            self.right_msg.motor_cmd[id].dq   = dq
+            self.right_msg.motor_cmd[id].tau  = tau
+            self.right_msg.motor_cmd[id].kp   = kp
+            self.right_msg.motor_cmd[id].kd   = kd  
+
+        try:
+            while self.running:
+                start_time = time.time()
+                # get dual hand state
+                left_hand_mat  = np.array(left_hand_array[:]).reshape(25, 3).copy()
+                right_hand_mat = np.array(right_hand_array[:]).reshape(25, 3).copy()
+
+                # Read left and right q_state from shared arrays
+                state_data = np.concatenate((np.array(left_hand_state_array[:]), np.array(right_hand_state_array[:])))
+
+                if not np.all(right_hand_mat == 0.0) and not np.all(left_hand_mat[4] == np.array([-1.13, 0.3, 0.15])): # if hand data has been initialized.
+                    ref_left_value = left_hand_mat[unitree_tip_indices]
+                    ref_right_value = right_hand_mat[unitree_tip_indices]
+                    ref_left_value[0] = ref_left_value[0] * 1.15
+                    ref_left_value[1] = ref_left_value[1] * 1.05
+                    ref_left_value[2] = ref_left_value[2] * 0.95
+                    ref_right_value[0] = ref_right_value[0] * 1.15
+                    ref_right_value[1] = ref_right_value[1] * 1.05
+                    ref_right_value[2] = ref_right_value[2] * 0.95
+
+                    left_q_target  = self.hand_retargeting.left_retargeting.retarget(ref_left_value)[self.hand_retargeting.right_dex_retargeting_to_hardware]
+                    right_q_target = self.hand_retargeting.right_retargeting.retarget(ref_right_value)[self.hand_retargeting.right_dex_retargeting_to_hardware]
+
+                    left_q_target = self.hand_classifier.classify_and_get_command(left_q_target, is_left_hand=True)
+                    right_q_target = self.hand_classifier.classify_and_get_command(right_q_target, is_left_hand=False)
+
+                # get dual hand action
+                action_data = np.concatenate((left_q_target, right_q_target))    
+                if dual_hand_state_array and dual_hand_action_array:
+                    with dual_hand_data_lock:
+                        dual_hand_state_array[:] = state_data
+                        dual_hand_action_array[:] = action_data
+
+                self.ctrl_dual_hand(left_q_target, right_q_target)
+                current_time = time.time()
+                time_elapsed = current_time - start_time
+                sleep_time = max(0, (1 / self.fps) - time_elapsed)
+                time.sleep(sleep_time)
+        finally:
+            print("Dex3_1_State_Controller has been closed.")
 
 class Dex3_1_Controller:
     def __init__(self, left_hand_array, right_hand_array, dual_hand_data_lock = None, dual_hand_state_array = None,

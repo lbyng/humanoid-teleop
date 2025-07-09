@@ -14,16 +14,17 @@ sys.path.append(parent_dir)
 from teleop.open_television.tv_wrapper import TeleVisionWrapper
 from teleop.robot_control.robot_arm import G1_29_ArmController, G1_23_ArmController, H1_2_ArmController, H1_ArmController
 from teleop.robot_control.robot_arm_ik import G1_29_ArmIK, G1_23_ArmIK, H1_2_ArmIK, H1_ArmIK
-from teleop.robot_control.robot_hand_unitree import Dex3_1_Controller, Gripper_Controller
+from teleop.robot_control.robot_hand_unitree import Gripper_Controller, Dex3_1_State_Controller
 from teleop.robot_control.robot_hand_inspire import Inspire_Controller
 from teleop.image_server.image_client import ImageClient
 from teleop.utils.episode_writer import EpisodeWriter
 
 
 if __name__ == '__main__':
+    import config_recorder
     parser = argparse.ArgumentParser()
-    parser.add_argument('--task_dir', type = str, default = './utils/data', help = 'path to save data')
-    parser.add_argument('--frequency', type = int, default = 30.0, help = 'save data\'s frequency')
+    parser.add_argument('--task_dir', type = str, default = config_recorder.OUTPUT_DIR, help = 'path to save data')
+    parser.add_argument('--frequency', type = int, default = config_recorder.FREQUENCY, help = 'save data\'s frequency')
 
     parser.add_argument('--record', action = 'store_true', help = 'Save data or not')
     parser.add_argument('--no-record', dest = 'record', action = 'store_false', help = 'Do not save data')
@@ -38,12 +39,13 @@ if __name__ == '__main__':
     # image client: img_config should be the same as the configuration in image_server.py (of Robot's development computing unit)
     img_config = {
         'fps': 30,
-        'head_camera_type': 'opencv',
+        'head_camera_type': 'realsense',
         'head_camera_image_shape': [720, 1280],  # Head camera resolution
         'head_camera_id_numbers': ["335622071386"],
-        # 'wrist_camera_type': 'opencv',
-        # 'wrist_camera_image_shape': [480, 640],  # Wrist camera resolution
-        # 'wrist_camera_id_numbers': [2, 4],
+        'fps': 30,
+        'wrist_camera_type': 'realsense',
+        'wrist_camera_image_shape': [720, 1280],  # Fix camera resolution
+        'wrist_camera_id_numbers': ["336222076815"],
     }
     ASPECT_RATIO_THRESHOLD = 2.0 # If the aspect ratio exceeds this value, it is considered binocular
     if len(img_config['head_camera_id_numbers']) > 1 or (img_config['head_camera_image_shape'][1] / img_config['head_camera_image_shape'][0] > ASPECT_RATIO_THRESHOLD):
@@ -100,7 +102,7 @@ if __name__ == '__main__':
         dual_hand_data_lock = Lock()
         dual_hand_state_array = Array('d', 14, lock = False)  # [output] current left, right hand state(14) data.
         dual_hand_action_array = Array('d', 14, lock = False) # [output] current left, right hand action(14) data.
-        hand_ctrl = Dex3_1_Controller(left_hand_array, right_hand_array, dual_hand_data_lock, dual_hand_state_array, dual_hand_action_array)
+        hand_ctrl = Dex3_1_State_Controller(left_hand_array, right_hand_array, dual_hand_data_lock, dual_hand_state_array, dual_hand_action_array)
     elif args.hand == "gripper":
         left_hand_array = Array('d', 75, lock=True)
         right_hand_array = Array('d', 75, lock=True)
@@ -132,22 +134,35 @@ if __name__ == '__main__':
                 start_time = time.time()
                 head_rmat, left_wrist, right_wrist, left_hand, right_hand = tv_wrapper.get_data()
 
-                # send hand skeleton data to hand_ctrl.control_process
-                if args.hand:
-                    left_hand_array[:] = left_hand.flatten()
-                    right_hand_array[:] = right_hand.flatten()
-
                 # get current state data.
                 current_lr_arm_q  = arm_ctrl.get_current_dual_arm_q()
                 current_lr_arm_dq = arm_ctrl.get_current_dual_arm_dq()
 
-                # solve ik using motor data and wrist pose, then use ik results to control arms.
-                time_ik_start = time.time()
-                sol_q, sol_tauff  = arm_ik.solve_ik(left_wrist, right_wrist, current_lr_arm_q, current_lr_arm_dq)
-                # print(sol_tauff)
-                time_ik_end = time.time()
-                # print(f"ik:\t{round(time_ik_end - time_ik_start, 6)}")
-                arm_ctrl.ctrl_dual_arm(sol_q, sol_tauff)
+                # Only respond to VR when not in record mode OR currently recording
+                if not args.record or recording:
+                    # Normal VR control mode
+                    # Send hand skeleton data to hand controller
+                    if args.hand:
+                        left_hand_array[:] = left_hand.flatten()
+                        right_hand_array[:] = right_hand.flatten()
+                    
+                    # Solve IK and control arms
+                    time_ik_start = time.time()
+                    sol_q, sol_tauff = arm_ik.solve_ik(left_wrist, right_wrist, current_lr_arm_q, current_lr_arm_dq)
+                    time_ik_end = time.time()
+                    # print(f"ik:\t{round(time_ik_end - time_ik_start, 6)}")
+                    arm_ctrl.ctrl_dual_arm(sol_q, sol_tauff)
+                else:
+                    # Record mode but not recording: send zero commands to stay at home position
+                    # Send zero hand data to keep hands at home
+                    if args.hand:
+                        left_hand_array[:] = np.zeros(75)
+                        right_hand_array[:] = np.zeros(75)
+                    
+                    # Send zero arm commands to stay at home position
+                    sol_q = np.zeros(14)
+                    sol_tauff = np.zeros(14)
+                    arm_ctrl.ctrl_dual_arm(sol_q, sol_tauff)
 
                 tv_resized_image = cv2.resize(tv_img_array, (tv_img_shape[1] // 2, tv_img_shape[0] // 2))
                 cv2.imshow("record image", tv_resized_image)
@@ -157,10 +172,37 @@ if __name__ == '__main__':
                 elif key == ord('s') and args.record:
                     recording = not recording # state flipping
                     if recording:
+                        print("Recording started...")
                         if not recorder.create_episode():
                             recording = False
                     else:
+                        print("Recording stopped and saved.")
                         recorder.save_episode()
+                # elif key == ord('d') and args.record and recording:
+                #     # Press 'd' to discard current recording
+                #     print("Discarding current recording...")
+                #     recording = False
+                elif key == ord('d') and args.record and recording:
+                    # Press 'd' to discard current recording
+                    print("Discarding current recording...")
+                    recording = False
+                    
+                    # Save the episode to reset the state
+                    recorder.save_episode()
+                    
+                    # Wait for save to complete
+                    while not recorder.is_available:
+                        time.sleep(0.01)
+                    
+                    # Delete the saved episode
+                    episode_to_delete = recorder.episode_dir
+                    if os.path.exists(episode_to_delete):
+                        import shutil
+                        shutil.rmtree(episode_to_delete)
+                        print(f"Deleted discarded episode: {episode_to_delete}")
+                        
+                    # Decrement episode ID for next recording
+                    recorder.episode_id -= 1
 
                 # record data
                 if args.record:
