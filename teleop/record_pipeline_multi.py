@@ -14,7 +14,7 @@ sys.path.append(parent_dir)
 from teleop.open_television.tv_wrapper import TeleVisionWrapper
 from teleop.robot_control.robot_arm import G1_29_ArmController, G1_23_ArmController, H1_2_ArmController, H1_ArmController
 from teleop.robot_control.robot_arm_ik import G1_29_ArmIK, G1_23_ArmIK, H1_2_ArmIK, H1_ArmIK
-from teleop.robot_control.robot_hand_unitree import Gripper_Controller, Dex3_1_State_Controller
+from teleop.robot_control.robot_hand_unitree import Gripper_Controller, Dex3_1_State_Controller, Dex3_1_Controller
 from teleop.robot_control.robot_hand_inspire import Inspire_Controller
 from teleop.image_server.image_client import ImageClient
 from teleop.utils.episode_writer import EpisodeWriter

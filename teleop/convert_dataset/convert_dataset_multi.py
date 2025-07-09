@@ -19,7 +19,7 @@ def convert_episode(episode_dir, output_base_dir, task_name):
     
     # Create output directory structure - simplified
     head_dir = os.path.join(output_base_dir, "head", episode_id)
-    wrist_dir = os.path.join(output_base_dir, "wrist", episode_id)
+    wrist_dir = os.path.join(output_base_dir, "fix", episode_id)
     os.makedirs(head_dir, exist_ok=True)
     os.makedirs(wrist_dir, exist_ok=True)
     
@@ -42,12 +42,13 @@ def convert_episode(episode_dir, output_base_dir, task_name):
         
         # Process images
         if 'colors' in item and item['colors']:
-            image_paths = []
+            # Temporary storage for paths
+            head_path = None
+            wrist_path = None
             
             # Based on your naming convention:
             # color_0 = head camera
-            # color_1 = wrist camera (using left wrist since you only have one)
-            # color_2 = duplicate wrist camera (ignore)
+            # color_2 = wrist camera
             
             # Process head camera image (color_0)
             if 'color_0' in item['colors']:
@@ -57,28 +58,31 @@ def convert_episode(episode_dir, output_base_dir, task_name):
                 
                 if os.path.exists(original_head_path):
                     shutil.copy2(original_head_path, new_head_path)
-                    relative_head_path = os.path.join("head", episode_id, new_head_name)
-                    image_paths.append(relative_head_path)
+                    head_path = os.path.join("head", episode_id, new_head_name)
                 else:
                     print(f"Warning: Head image file {original_head_path} not found")
                     continue
             
             # Process wrist camera image (color_1)
-            if 'color_1' in item['colors']:
-                original_wrist_path = os.path.join(episode_dir, item['colors']['color_1'])
+            if 'color_2' in item['colors']:
+                original_wrist_path = os.path.join(episode_dir, item['colors']['color_2'])
                 new_wrist_name = f"{step_id}.png"
                 new_wrist_path = os.path.join(wrist_dir, new_wrist_name)
                 
                 if os.path.exists(original_wrist_path):
                     shutil.copy2(original_wrist_path, new_wrist_path)
-                    relative_wrist_path = os.path.join("wrist", episode_id, new_wrist_name)
-                    image_paths.append(relative_wrist_path)
+                    wrist_path = os.path.join("fix", episode_id, new_wrist_name)
                 else:
                     print(f"Warning: Wrist image file {original_wrist_path} not found")
             
-            # Note: Ignoring color_2 since it's duplicate of color_1
+            # Build image paths list with wrist first, then head
+            image_paths = []
+            if wrist_path:
+                image_paths.append(wrist_path)  # First: wrist
+            if head_path:
+                image_paths.append(head_path)   # Second: head
             
-            # Only create entry if we have at least the head image
+            # Only create entry if we have at least one image
             if len(image_paths) > 0:
                 # Extract action data with delta calculation
                 raw_action, current_left_arm, current_right_arm = extract_action_data(
@@ -91,7 +95,7 @@ def convert_episode(episode_dir, output_base_dir, task_name):
                 
                 # Create converted data entry
                 converted_item = {
-                    "images": image_paths,  # [head_path, wrist_path]
+                    "images": image_paths,  # [wrist_path, head_path]
                     "task": task_description,
                     "raw_action": json.dumps(raw_action)
                 }
@@ -197,11 +201,17 @@ def convert_dataset(input_dir, output_dir, task_name=None):
         # Count images
         episode_has_wrist = False
         for item in converted_items:
-            if len(item['images']) >= 1:
-                total_head_images += 1
-            if len(item['images']) >= 2:
+            # Check if both wrist and head exist
+            if len(item['images']) == 2:
                 total_wrist_images += 1
+                total_head_images += 1
                 episode_has_wrist = True
+            elif len(item['images']) == 1:
+                # Could be either wrist or head only
+                if 'wrist' in item['images'][0]:
+                    total_wrist_images += 1
+                else:
+                    total_head_images += 1
         
         if episode_has_wrist:
             episodes_with_wrist += 1
@@ -228,8 +238,9 @@ def convert_dataset(input_dir, output_dir, task_name=None):
         example = all_converted_data[0].copy()
         example['raw_action'] = json.loads(example['raw_action'])[:5] + ['...']  # Show first 5 values
         print(json.dumps(example, indent=2))
+        print("\nNote: images array order is [wrist, head]")
     
-    # # Show directory structure
+    # Show directory structure
     # print("\nDirectory structure:")
     # print(f"{output_path}/")
     # print("├── converted_dataset.json")
