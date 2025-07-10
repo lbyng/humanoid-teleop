@@ -30,11 +30,11 @@ kTopicDex3RightState = "rt/dex3/right/state"
 
 class HandStateClassifier:
     def __init__(self):
-        # self.left_close_cmd = np.array([0, 1.05, 1.75, -1.57, -1.75, -1.57, -1.75])
-        # self.right_close_cmd = np.array([0, -1.05 , -1.75, 1.57, 1.75, 1.57, 1.75])
+        self.left_close_cmd = np.array([0, 1.05, 1.75, -1.57, -1.75, -1.57, -1.75])
+        self.right_close_cmd = np.array([0, -1.05 , -1.75, 1.57, 1.75, 1.57, 1.75])
 
-        self.left_close_cmd = np.zeros(7)
-        self.right_close_cmd = np.zeros(7)
+        # self.left_close_cmd = np.zeros(7)
+        # self.right_close_cmd = np.zeros(7)
         
         self.left_open_cmd = np.zeros(7)
         self.right_open_cmd = np.zeros(7)
@@ -42,7 +42,7 @@ class HandStateClassifier:
         self.close_threshold = 0.8
         
         # Confidence parameters
-        self.confidence_threshold = 5
+        self.confidence_threshold = 10
         
         # State tracking for each hand
         self.left_hand_closed = False

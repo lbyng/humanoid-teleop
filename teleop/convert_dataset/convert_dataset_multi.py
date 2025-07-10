@@ -95,7 +95,7 @@ def convert_episode(episode_dir, output_base_dir, task_name):
                 
                 # Create converted data entry
                 converted_item = {
-                    "images": image_paths,  # [wrist_path, head_path]
+                    "image": image_paths,  # [wrist_path, head_path]
                     "task": task_description,
                     "raw_action": json.dumps(raw_action)
                 }
@@ -202,13 +202,13 @@ def convert_dataset(input_dir, output_dir, task_name=None):
         episode_has_wrist = False
         for item in converted_items:
             # Check if both wrist and head exist
-            if len(item['images']) == 2:
+            if len(item['image']) == 2:
                 total_wrist_images += 1
                 total_head_images += 1
                 episode_has_wrist = True
-            elif len(item['images']) == 1:
+            elif len(item['image']) == 1:
                 # Could be either wrist or head only
-                if 'wrist' in item['images'][0]:
+                if 'wrist' in item['image'][0]:
                     total_wrist_images += 1
                 else:
                     total_head_images += 1
