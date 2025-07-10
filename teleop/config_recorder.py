@@ -1,2 +1,2 @@
-OUTPUT_DIR = "../data/raw_data/clean_plate"
+OUTPUT_DIR = "../data/raw_data/test"
 FREQUENCY = 15

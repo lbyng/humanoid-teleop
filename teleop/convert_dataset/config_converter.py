@@ -1,3 +1,3 @@
-INPUT_DIR = "../../data/raw_data/clean_plate"
-OUTPUT_DIR = "../../data/converted_data/clean_plate"
-TASK_NAME = "clean plate"
+INPUT_DIR = "../../data/raw_data/test"
+OUTPUT_DIR = "../../data/converted_data/test"
+TASK_NAME = "test"
