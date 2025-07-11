@@ -103,11 +103,11 @@ class RealSenseRecorder:
             colors = []
             
             h, w = depth_image.shape
-            downsample = 4  # Increase this value for faster processing
+            downsample = 4  # TODO
             for y in range(0, h, downsample):
                 for x in range(0, w, downsample):
                     z = depth_image[y, x] * self.depth_scale
-                    if z == 0 or z > 5.0:  # Skip invalid or far points
+                    if z == 0 or z > 5.0:  # TODO
                         continue
                     
                     # Deproject pixel to 3D point

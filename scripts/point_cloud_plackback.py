@@ -78,9 +78,9 @@ def initialize_figure(initialized):
         
         return fig
     
-    return Patch()  # Don't update if already initialized
+    return Patch()
 
-# Update only the data, not the layout
+# Update the data,
 @app.callback(
     [Output('pointcloud', 'figure', allow_duplicate=True),
      Output('rgb-image', 'src'),
